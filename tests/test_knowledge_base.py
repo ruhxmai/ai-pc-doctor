@@ -30,3 +30,35 @@ class KnowledgeBaseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SemanticSearchTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from pcdoctor.frames import FrameSystem
+        kb = KnowledgeBase.load()
+        cls.net = SemanticNetwork.from_knowledge_base(kb)
+        cls.net.add_frames(FrameSystem.load(kb=kb, current_year=2026))
+
+    def test_query(self):
+        sources = {e.source for e in self.net.query(relation="manifests", target="bsod")}
+        self.assertEqual(sources, {"ram_failure", "disk_failure", "gpu_failure", "driver_issue", "os_corruption"})
+
+    def test_related(self):
+        related = self.net.related("overheating", depth=2, relations={"affects", "part_of"})
+        self.assertIn("cooler", related)
+        self.assertIn("system_unit", related)
+        self.assertEqual(len(related["system_unit"]), 2)
+
+    def test_path(self):
+        path = self.net.find_path("clicking_sound", "my_pc")
+        self.assertIsNotNone(path)
+        self.assertEqual(path[0].source, "disk_failure")
+
+    def test_inheritance(self):
+        targets = {e.target for e, _ in self.net.inherited_edges("hdd_seagate_1tb", "part_of")}
+        self.assertEqual(targets, {"my_pc", "system_unit"})
+
+    def test_activation(self):
+        top = self.net.activate(["artifacts_screen", "games_crash"], node_type="fault")[0][0]
+        self.assertEqual(top, "gpu_failure")

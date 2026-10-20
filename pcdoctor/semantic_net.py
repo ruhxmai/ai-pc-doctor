@@ -1,7 +1,9 @@
-"""Семантическая сеть предметной области (неделя 4).
+"""Семантическая сеть предметной области (недели 4 и 10).
 
-Узлы — понятия (компоненты, неисправности, признаки, способы устранения),
-дуги — именованные отношения между ними.
+Узлы — понятия (компоненты, неисправности, признаки, способы устранения,
+конкретные экземпляры), дуги — именованные отношения между ними.
+Неделя 10: поиск связанных объектов, путей, шаблонные запросы, наследование,
+распространение активации.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ RELATIONS = {
     "affects": "поражает",
     "manifests": "проявляется как",
     "fixed_by": "устраняется",
+    "instance_of": "экземпляр",
 }
 
 
@@ -130,3 +133,150 @@ class SemanticNetwork:
             net.add_node(fix_id, f.fix, "fix")
             net.add_edge(f.id, "fixed_by", fix_id)
         return net
+
+    def add_frames(self, fs) -> None:
+        """Добавляет в сеть экземпляры из фреймовой модели (конкретные комплектующие «Моего компьютера»)."""
+        for name, frame in fs.frames.items():
+            if frame.kind != "instance" or name in self.nodes:
+                continue
+            self.add_node(name, frame.label, "instance")
+        for name, frame in fs.frames.items():
+            if frame.kind != "instance" or self.nodes[name].type != "instance":
+                continue
+            for parent in frame.is_a:
+                self.add_node(parent, fs.label(parent), "component")
+                self.add_edge(name, "instance_of", parent)
+            container = frame.slots.get("part_of")
+            if container is not None and container.value in self.nodes:
+                self.add_edge(name, "part_of", container.value)
+
+    # --- неделя 10: поиск связанных объектов ---------------------------------
+
+    def query(self, source: str | None = None, relation: str | None = None,
+              target: str | None = None) -> list[Edge]:
+        """Поиск по шаблону триплета (None — любое значение): query(None, 'manifests', 'bsod')."""
+        if source is not None:
+            candidates = self._out.get(source, [])
+        elif target is not None:
+            candidates = self._in.get(target, [])
+        else:
+            candidates = self.edges
+        return [e for e in candidates
+                if (source is None or e.source == source)
+                and (relation is None or e.relation == relation)
+                and (target is None or e.target == target)]
+
+    def related(self, start: str, depth: int = 2, relations: set[str] | None = None,
+                direction: str = "both") -> dict[str, list[Edge]]:
+        """Поиск в ширину: все узлы на расстоянии ≤ depth и путь (цепочка дуг) до каждого."""
+        if start not in self.nodes:
+            raise KeyError(f"Узел {start} не найден")
+        paths: dict[str, list[Edge]] = {start: []}
+        frontier = [start]
+        for _ in range(depth):
+            next_frontier = []
+            for node in frontier:
+                for edge, other in self._steps(node, relations, direction):
+                    if other not in paths:
+                        paths[other] = paths[node] + [edge]
+                        next_frontier.append(other)
+            frontier = next_frontier
+        del paths[start]
+        return paths
+
+    def _steps(self, node: str, relations: set[str] | None, direction: str):
+        if direction in ("out", "both"):
+            for e in self._out[node]:
+                if relations is None or e.relation in relations:
+                    yield e, e.target
+        if direction in ("in", "both"):
+            for e in self._in[node]:
+                if relations is None or e.relation in relations:
+                    yield e, e.source
+
+    def find_path(self, start: str, goal: str, relations: set[str] | None = None) -> list[Edge] | None:
+        """Кратчайшая цепочка связей между двумя понятиями (дуги проходятся в обе стороны)."""
+        if start == goal:
+            return []
+        paths = {start: []}
+        frontier = [start]
+        while frontier:
+            next_frontier = []
+            for node in frontier:
+                for edge, other in self._steps(node, relations, "both"):
+                    if other in paths:
+                        continue
+                    paths[other] = paths[node] + [edge]
+                    if other == goal:
+                        return paths[other]
+                    next_frontier.append(other)
+            frontier = next_frontier
+        return None
+
+    def generalizations(self, node: str) -> list[str]:
+        """Все родовые понятия узла по is_a / instance_of."""
+        result, stack = [], [node]
+        while stack:
+            for e in self.out_edges(stack.pop()):
+                if e.relation in ("is_a", "instance_of") and e.target not in result:
+                    result.append(e.target)
+                    stack.append(e.target)
+        return result
+
+    def inherited_edges(self, node: str, relation: str) -> list[tuple[Edge, str]]:
+        """Наследование в сети: связи, полученные от родовых понятий (hdd «входит в» системный блок,
+        потому что так входит любой накопитель). Возвращает (дуга, от кого унаследована)."""
+        result, seen = [], set()
+        for origin in [node] + self.generalizations(node):
+            for e in self.out_edges(origin, relation):
+                if e.target not in seen:
+                    seen.add(e.target)
+                    result.append((e, origin))
+        return result
+
+    def common(self, a: str, b: str, relation: str | None = None) -> list[str]:
+        """Общие соседи двух узлов по исходящим дугам (например, общие признаки двух неисправностей)."""
+        ta = {e.target for e in self.out_edges(a, relation)}
+        return [e.target for e in self.out_edges(b, relation) if e.target in ta]
+
+    def activate(self, seeds: list[str], steps: int = 2, decay: float = 0.5,
+                 node_type: str | None = None) -> list[tuple[str, float]]:
+        """Распространение активации: от исходных узлов энергия растекается по дугам с затуханием.
+
+        Сильнее всего активируются понятия, связанные сразу с несколькими исходными узлами, —
+        так по набору признаков находятся наиболее вероятные неисправности.
+        """
+        activation = {s: 1.0 for s in seeds if s in self.nodes}
+        current = dict(activation)
+        for _ in range(steps):
+            spread: dict[str, float] = {}
+            for node, energy in current.items():
+                neighbours = self.neighbors(node)
+                if not neighbours:
+                    continue
+                share = energy * decay / len(neighbours) ** 0.5
+                for other in neighbours:
+                    spread[other] = spread.get(other, 0.0) + share
+            for node, energy in spread.items():
+                activation[node] = activation.get(node, 0.0) + energy
+            current = spread
+        ranking = [(n, a) for n, a in activation.items()
+                   if n not in seeds and (node_type is None or self.nodes[n].type == node_type)]
+        return sorted(ranking, key=lambda x: -x[1])
+
+    def describe(self, node: str) -> str:
+        n = self.nodes[node]
+        lines = [f"«{n.label}» ({node}, тип: {n.type})"]
+        for e in self.out_edges(node):
+            lines.append(f"  → {RELATIONS.get(e.relation, e.relation)}: {self.label(e.target)}")
+        for e in self.in_edges(node):
+            lines.append(f"  ← {self.label(e.source)} {RELATIONS.get(e.relation, e.relation)} это")
+        return "\n".join(lines)
+
+    def path_to_text(self, path: list[Edge]) -> str:
+        if not path:
+            return "(тот же узел)"
+        parts = []
+        for e in path:
+            parts.append(f"«{self.label(e.source)}» —{RELATIONS.get(e.relation, e.relation)}→ «{self.label(e.target)}»")
+        return ";  ".join(parts)
