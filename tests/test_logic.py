@@ -38,3 +38,40 @@ class LogicTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LogicOperatorsTest(unittest.TestCase):
+    def setUp(self):
+        self.engine = LogicEngine()
+        self.engine.consult_file(DATA_DIR / "logic_kb.pl")
+
+    def diagnose(self, *symptoms):
+        for s in symptoms:
+            self.engine.add_fact(f"symptom({s})")
+        return {a["F"] for a in self.engine.ask("diagnosis(F)")}
+
+    def test_or(self):
+        self.assertIn("psu_failure", self.diagnose("no_power", "burning_smell"))
+
+    def test_not_blocks(self):
+        result = self.diagnose("artifacts_screen", "after_update")
+        self.assertNotIn("gpu_failure", result)
+        self.assertIn("driver_issue", result)
+
+    def test_not_allows(self):
+        self.assertIn("gpu_failure", self.diagnose("artifacts_screen"))
+
+    def test_parse_operators(self):
+        from pcdoctor.logic import And, Not, Or
+        q = parse_query("a, (b ; c), not d")
+        self.assertIsInstance(q, And)
+        self.assertIsInstance(q.items[1], Or)
+        self.assertIsInstance(q.items[2], Not)
+
+    def test_explanation(self):
+        from pcdoctor.explanation import explain_proof, why_not
+        self.diagnose("no_power", "fans_not_spin")
+        text = explain_proof(self.engine.prove("diagnosis(psu_failure)"))
+        self.assertIn("symptom(no_power) — факт", text)
+        self.assertIn("ИЛИ", text)
+        self.assertIn("✘", why_not(self.engine, "diagnosis(ram_failure)"))

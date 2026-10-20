@@ -62,17 +62,45 @@ hardware_fault(F) :- affects(F, C), kind_of(C, hardware_component).
 software_fault(F) :- affects(F, C), kind_of(C, software).
 in_system_unit(F) :- affects(F, C), inside(C, system_unit).
 
-% ---------- Диагностические правила ----------
+% ---------- Диагностические правила (неделя 6: AND «,»  OR «;»  NOT «not») ----------
 % Признаки пользователя добавляются в базу как факты symptom(...).
-diagnosis(psu_failure) :- symptom(no_power), symptom(fans_not_spin).
-diagnosis(ram_failure) :- symptom(beeps), symptom(bsod).
-diagnosis(overheating) :- symptom(high_temp), symptom(random_reboots).
-diagnosis(disk_failure) :- symptom(clicking_sound), symptom(files_corrupted).
-diagnosis(gpu_failure) :- symptom(artifacts_screen), symptom(games_crash).
-diagnosis(malware) :- symptom(popups_ads), symptom(slow_work).
-diagnosis(driver_issue) :- symptom(after_update), symptom(device_not_working).
-diagnosis(os_corruption) :- symptom(boot_failure), symptom(bsod).
+% Отрицание работает по гипотезе замкнутого мира: не сообщённый признак считается отсутствующим.
+
+diagnosis(psu_failure) :-
+    symptom(no_power), (symptom(fans_not_spin) ; symptom(burning_smell)).
+diagnosis(psu_failure) :-
+    symptom(random_reboots), symptom(burning_smell).
+
+diagnosis(ram_failure) :-
+    symptom(beeps), (symptom(bsod) ; symptom(random_reboots) ; symptom(freezes)),
+    not symptom(artifacts_screen).
+
+diagnosis(overheating) :-
+    symptom(high_temp), (symptom(random_reboots) ; symptom(loud_fan) ; symptom(slow_work) ; symptom(games_crash)).
+
+diagnosis(disk_failure) :-
+    symptom(clicking_sound), (symptom(files_corrupted) ; symptom(slow_work) ; symptom(freezes)).
+diagnosis(disk_failure) :-
+    symptom(files_corrupted), symptom(boot_failure), not symptom(after_update).
+
+diagnosis(gpu_failure) :-
+    symptom(artifacts_screen), not symptom(after_update).
+diagnosis(gpu_failure) :-
+    symptom(no_image), not symptom(no_power), not symptom(beeps).
+
+diagnosis(malware) :-
+    symptom(popups_ads) ; (symptom(high_cpu_idle), symptom(slow_work)).
+
+diagnosis(driver_issue) :-
+    symptom(after_update), (symptom(device_not_working) ; symptom(artifacts_screen)).
+
+diagnosis(os_corruption) :-
+    symptom(boot_failure), not symptom(clicking_sound), not symptom(no_power).
+diagnosis(os_corruption) :-
+    symptom(bsod), symptom(after_update), not symptom(device_not_working).
 
 % ---------- Следствия диагноза ----------
 needs_service(F) :- diagnosis(F), hardware_fault(F).
-urgent(F) :- diagnosis(F), severity(F, high).
+urgent(F) :- diagnosis(F), (severity(F, high) ; symptom(burning_smell)).
+backup_data :- diagnosis(disk_failure) ; diagnosis(malware) ; diagnosis(os_corruption).
+self_repair(F) :- diagnosis(F), not hardware_fault(F).

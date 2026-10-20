@@ -1,9 +1,12 @@
-"""Логическая модель знаний (неделя 5).
+"""Логическая модель знаний (недели 5–6).
 
 Знания записываются на подмножестве языка Prolog:
 
     is_a(hdd, storage).                                  % факт
     kind_of(X, Z) :- is_a(X, Y), kind_of(Y, Z).          % правило (импликация)
+    d(gpu) :- s(artifacts), (s(crash) ; s(no_image)), not s(after_update).
+
+Связки: «,» или and — И; «;» или or — ИЛИ; not или \\+ — НЕ.
 
 Переменные начинаются с заглавной буквы или «_», константы — со строчной.
 Логический вывод — обратный (от цели к фактам) с унификацией переменных,
@@ -58,6 +61,44 @@ class And:
 
 
 @dataclass(frozen=True)
+class Or:
+    """Дизъюнкция: достаточно доказать любую из альтернатив."""
+    items: tuple
+
+    def __str__(self) -> str:
+        return "(" + " ; ".join(str(i) for i in self.items) + ")"
+
+    def substitute(self, s: Subst) -> "Or":
+        return Or(tuple(i.substitute(s) for i in self.items))
+
+    def variables(self) -> list[str]:
+        return [v for i in self.items for v in i.variables()]
+
+
+@dataclass(frozen=True)
+class Not:
+    """Отрицание как неудача (negation as failure): истинно, если цель НЕ выводится.
+
+    Соответствует гипотезе замкнутого мира: всё, что не известно и не выводится, — ложно.
+    """
+    item: object
+
+    def __str__(self) -> str:
+        return f"not {self.item}"
+
+    def substitute(self, s: Subst) -> "Not":
+        return Not(self.item.substitute(s))
+
+    def variables(self) -> list[str]:
+        return self.item.variables()
+
+
+def conjuncts(expr) -> list:
+    """Список условий верхнего уровня (для объяснения «почему нет»)."""
+    return list(expr.items) if isinstance(expr, And) else [expr]
+
+
+@dataclass(frozen=True)
 class Rule:
     head: Atom
     body: object  # Atom | And
@@ -71,7 +112,7 @@ class Rule:
 class Proof:
     """Узел дерева доказательства (используется для объяснения вывода)."""
     goal: str
-    kind: str  # fact | rule | and
+    kind: str  # fact | rule | and | or | not
     rule: Rule | None = None
     children: list["Proof"] = field(default_factory=list)
 
@@ -147,12 +188,35 @@ class Parser:
             self.take(")")
         return Atom(pred, tuple(args))
 
+    # Грамматика тела правила (по убыванию приоритета: not, AND, OR):
+    #   body    := and_expr ( (";" | "or") and_expr )*
+    #   and_expr:= unary ( ("," | "and") unary )*
+    #   unary   := ("not" | "\+") unary | "(" body ")" | atom
     def body(self):
-        items = [self.atom()]
-        while self.peek() == ",":
-            self.take(",")
-            items.append(self.atom())
+        items = [self.and_expr()]
+        while self.peek() in (";", "or"):
+            self.take()
+            items.append(self.and_expr())
+        return items[0] if len(items) == 1 else Or(tuple(items))
+
+    def and_expr(self):
+        items = [self.unary()]
+        while self.peek() in (",", "and"):
+            self.take()
+            items.append(self.unary())
         return items[0] if len(items) == 1 else And(tuple(items))
+
+    def unary(self):
+        tok = self.peek()
+        if tok in ("not", "\\+"):
+            self.take()
+            return Not(self.unary())
+        if tok == "(":
+            self.take("(")
+            expr = self.body()
+            self.take(")")
+            return expr
+        return self.atom()
 
     def clauses(self) -> Iterator[Atom | Rule]:
         while self.peek() is not None:
@@ -239,6 +303,15 @@ class LogicEngine:
             return
         if isinstance(goal, And):
             yield from self._solve_and(list(goal.items), s, depth, [])
+        elif isinstance(goal, Or):
+            for i, alt in enumerate(goal.items, 1):
+                for s1, p in self.solve(alt, s, depth):
+                    yield s1, Proof(f"ИЛИ: выполнена альтернатива {i} из {len(goal.items)}", "or",
+                                    children=[p])
+        elif isinstance(goal, Not):
+            inner = goal.item.substitute(s)
+            if next(self.solve(inner, s, depth + 1), None) is None:
+                yield s, Proof(f"НЕ {inner}", "not")
         elif isinstance(goal, Atom):
             yield from self._solve_atom(goal, s, depth)
         else:
