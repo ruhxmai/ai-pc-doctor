@@ -56,6 +56,11 @@ class Fault:
         return SEVERITY_LABELS.get(self.severity, self.severity)
 
 
+def lower_first(text: str) -> str:
+    """«Синий экран (BSOD)» → «синий экран (BSOD)»: аббревиатуры не портятся, в отличие от str.lower()."""
+    return text[:1].lower() + text[1:]
+
+
 class KnowledgeBase:
     """Хранилище знаний: компоненты, признаки (симптомы) и неисправности."""
 

@@ -23,7 +23,7 @@ from . import dataset
 from .classifier import ExpertBayes, NaiveBayes
 from .explanation import explain_proof
 from .frames import FrameSystem
-from .knowledge_base import DATA_DIR, MODELS_DIR, KnowledgeBase
+from .knowledge_base import DATA_DIR, MODELS_DIR, KnowledgeBase, lower_first
 from .logic import LogicEngine
 from .neural import MLP
 from .production import ProductionSystem
@@ -280,7 +280,7 @@ def format_report(diag: Diagnosis, kb: KnowledgeBase, details: bool = True) -> s
     best = kb.faults[diag.best.fault_id]
     lines.append(f"\nНаиболее вероятно: {best.name} ({best.type_label}, опасность — {best.severity_label})")
     lines.append(f"  {best.description}")
-    lines.append(f"Как устранить — {best.fix.lower()}:")
+    lines.append(f"Как устранить — {lower_first(best.fix)}:")
     lines += [f"  {i}. {step}" for i, step in enumerate(best.steps, 1)]
     if diag.advice:
         lines.append("Рекомендации:")
