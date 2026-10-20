@@ -37,3 +37,37 @@ class FramesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FrameProgramTest(unittest.TestCase):
+    def setUp(self):
+        self.fs = FrameSystem.load(kb=KnowledgeBase.load(), current_year=2026)
+
+    def test_find(self):
+        self.assertEqual(self.fs.find("has_moving_parts=да"), ["hdd_seagate_1tb"])
+        self.assertEqual(set(self.fs.find("max_temp>=95", "heat_source")), {"cpu_i5_12400"})
+        self.assertIn("ram_failure", self.fs.find("symptoms~bsod", "fault"))
+
+    def test_instances_of(self):
+        self.assertEqual(set(self.fs.instances_of("storage")), {"hdd_seagate_1tb", "ssd_samsung_970"})
+
+    def test_modify_and_delete(self):
+        self.fs.set("ssd_samsung_970", "typical_lifetime_years", 12)
+        self.assertEqual(self.fs.get("ssd_samsung_970", "typical_lifetime_years"), 12)
+        self.fs.delete_slot("ssd_samsung_970", "typical_lifetime_years")
+        self.assertEqual(self.fs.get("ssd_samsung_970", "typical_lifetime_years"), 8)
+
+    def test_create(self):
+        self.fs.create("ssd_new", "ssd", "Новый SSD", capacity_gb=1000, purchase_year=2026)
+        self.assertEqual(self.fs.get("ssd_new", "age_years"), 0)
+        self.assertIn("ssd_new", self.fs.find("capacity_gb>=1000"))
+
+    def test_save_load(self):
+        import os
+        import tempfile
+        path = os.path.join(tempfile.mkdtemp(), "f.json")
+        self.fs.set("cpu_i5_12400", "cores", 8)
+        self.fs.save(path)
+        loaded = FrameSystem.load(path, current_year=2026)
+        self.assertEqual(loaded.get("cpu_i5_12400", "cores"), 8)
+        self.assertEqual(loaded.get("hdd_seagate_1tb", "age_years"), 8)

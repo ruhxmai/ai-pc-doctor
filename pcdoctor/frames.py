@@ -1,4 +1,4 @@
-"""Фреймовая модель знаний (неделя 8).
+"""Фреймовая модель знаний (недели 8–9).
 
 Фрейм — структура «имя + набор слотов». Фреймы-классы (прототипы) задают значения
 по умолчанию, фреймы-экземпляры описывают конкретные объекты. Отношение is_a
@@ -248,3 +248,114 @@ class FrameSystem:
             if s is not None and getattr(s, facet):
                 return getattr(s, facet)
         return None
+
+    # --- неделя 9: поиск и изменение -----------------------------------------
+
+    def instances_of(self, cls_name: str) -> list[str]:
+        """Все экземпляры класса, включая экземпляры подклассов."""
+        return [n for n, f in self.frames.items() if f.kind == "instance" and self.is_a(n, cls_name)]
+
+    def subclasses(self, cls_name: str) -> list[str]:
+        return [n for n, f in self.frames.items() if f.kind == "class" and n != cls_name and self.is_a(n, cls_name)]
+
+    def find(self, conditions: list[tuple[str, str, Any]] | str, cls_name: str | None = None,
+             kind: str | None = "instance") -> list[str]:
+        """Поиск фреймов по условиям на слоты (с учётом наследования и демонов).
+
+        conditions — список (слот, оператор, значение) или строка «max_temp>90 has_moving_parts=да».
+        Операторы: = != > < >= <= ~ (подстрока / элемент списка).
+        """
+        if isinstance(conditions, str):
+            conditions = parse_conditions(conditions)
+        result = []
+        for name, frame in self.frames.items():
+            if kind and frame.kind != kind:
+                continue
+            if cls_name and not self.is_a(name, cls_name):
+                continue
+            if all(_compare(self.get(name, slot), op, value) for slot, op, value in conditions):
+                result.append(name)
+        return result
+
+    def delete_slot(self, name: str, slot: str) -> bool:
+        """Удаляет собственное значение слота — после этого снова действует унаследованное."""
+        s = self.frames[name].slots.get(slot)
+        if s is None or s.value is None:
+            return False
+        if s.if_needed or s.if_added:
+            s.value = None
+        else:
+            del self.frames[name].slots[slot]
+        return True
+
+    def create(self, name: str, parent: str, label: str | None = None, **slots) -> Frame:
+        """Создаёт фрейм-экземпляр и заполняет слоты (с вызовом демонов if_added)."""
+        if name in self.frames:
+            raise ValueError(f"Фрейм {name} уже существует")
+        frame = self.add(Frame(name, label or name, "instance", [parent]))
+        for slot, value in slots.items():
+            self.set(name, slot, value)
+        return frame
+
+    def delete(self, name: str) -> None:
+        children = [n for n, f in self.frames.items() if name in f.is_a]
+        if children:
+            raise ValueError(f"Нельзя удалить {name}: от него наследуют {', '.join(children)}")
+        del self.frames[name]
+
+    def save(self, path: str | Path) -> None:
+        data = {"frames": [f.to_dict() for f in self.frames.values()]}
+        Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def parse_value(text: str):
+    """Строка → значение слота: числа, логические значения, списки через запятую."""
+    low = text.strip().lower()
+    if low in ("true", "да", "yes"):
+        return True
+    if low in ("false", "нет", "no"):
+        return False
+    for cast in (int, float):
+        try:
+            return cast(text)
+        except ValueError:
+            pass
+    if "," in text:
+        return [parse_value(p) for p in text.split(",") if p.strip()]
+    return text.strip()
+
+
+_OPS = (">=", "<=", "!=", "=", ">", "<", "~")
+
+
+def parse_conditions(text: str) -> list[tuple[str, str, Any]]:
+    conditions = []
+    for part in text.split():
+        for op in _OPS:
+            if op in part:
+                slot, value = part.split(op, 1)
+                conditions.append((slot, op, parse_value(value)))
+                break
+        else:
+            conditions.append((part, "exists", None))
+    return conditions
+
+
+def _compare(actual, op: str, expected) -> bool:
+    if op == "exists":
+        return actual is not None
+    if actual is None:
+        return False
+    try:
+        if op == "=":
+            return actual == expected or str(actual).lower() == str(expected).lower()
+        if op == "!=":
+            return actual != expected
+        if op == "~":
+            if isinstance(actual, list):
+                return expected in actual
+            return str(expected).lower() in str(actual).lower()
+        return {">": actual > expected, "<": actual < expected,
+                ">=": actual >= expected, "<=": actual <= expected}[op]
+    except TypeError:
+        return False
