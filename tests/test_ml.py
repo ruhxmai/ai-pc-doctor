@@ -54,3 +54,44 @@ class DatasetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NeuralTest(unittest.TestCase):
+    def test_gradient_check(self):
+        """Аналитические градиенты совпадают с численными (конечные разности)."""
+        from pcdoctor.neural import MLP
+        rng = np.random.default_rng(0)
+        X = rng.integers(0, 2, (6, 5)).astype(float)
+        y = rng.integers(0, 3, 6)
+        net = MLP((5, 4, 3), l2=1e-2, seed=1)
+        gW, _ = net.gradients(X, y)
+        eps = 1e-5
+        for i, j in [(0, 0), (2, 3), (4, 1)]:
+            w = net.W[0]
+            old = w[i, j]
+            w[i, j] = old + eps
+            plus = net.loss(X, y)
+            w[i, j] = old - eps
+            minus = net.loss(X, y)
+            w[i, j] = old
+            self.assertAlmostEqual(gW[0][i, j], (plus - minus) / (2 * eps), places=5)
+
+    def test_training(self):
+        from pcdoctor.neural import MLP
+        kb = KnowledgeBase.load()
+        X, y = dataset.generate(kb, n_samples=1000, seed=3)
+        X_tr, X_te, y_tr, y_te = dataset.train_test_split(X, y)
+        net = MLP((20, 32, 16, 8), l2=1e-3)
+        history = net.fit(X_tr, y_tr, X_te, y_te, epochs=40, lr=0.003)
+        self.assertLess(history.loss[-1], history.loss[0])
+        self.assertGreater(metrics.accuracy(y_te, net.predict(X_te)), 0.75)
+
+    def test_save_load(self):
+        import os
+        import tempfile
+        from pcdoctor.neural import MLP
+        net = MLP((20, 8, 8))
+        path = os.path.join(tempfile.mkdtemp(), "m.npz")
+        net.save(path)
+        x = np.ones((1, 20))
+        self.assertTrue(np.allclose(MLP.load(path).predict_proba(x), net.predict_proba(x)))
